@@ -92,11 +92,16 @@ def handle_message(update: Update, context: CallbackContext):
     name, rarity = parse_card_filename(chosen_file)
     rarity_cap = rarity.capitalize()
     emoji = RARITY_EMOJIS.get(rarity, "🎴")
-    points = RARITY_POINTS.get(rarity, 0)
+    base_points = RARITY_POINTS.get(rarity, 0)
 
     already_has = any(card["name"] == name for card in user_data["cards"])
-    if not already_has:
+    if already_has:
+        points = int(base_points * 1) 
+        found_msg = "🔁 Повторная карточка!"
+    else:
+        points = base_points
         user_data["cards"].append({"name": name, "rarity": rarity_cap})
+        found_msg = "🎉 Новая карточка!"
 
     user_data["score"] += points
     user_data["last_time"] = now_ts
@@ -105,6 +110,7 @@ def handle_message(update: Update, context: CallbackContext):
     caption = (
         f"📸 *{name}*\n"
         f"{emoji} Редкость: *{rarity_cap}*\n"
+        f"{found_msg}\n"
         f"🎁 +{points} очков  |  🧮 Всего: {user_data['score']}"
     )
 
@@ -115,6 +121,7 @@ def handle_message(update: Update, context: CallbackContext):
             caption=caption,
             parse_mode='Markdown'
         )
+
 
 def mycards_command(update: Update, context: CallbackContext):
     user = update.message.from_user
