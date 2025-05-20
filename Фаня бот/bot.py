@@ -26,6 +26,14 @@ RARITY_POINTS = {
     "лимитированная": 100
 }
 
+RARITY_PROBABILITIES = {
+    "обычная": 0,
+    "редкая": 0,
+    "мифическая": 0,
+    "легендарная": 25,
+    "лимитированная": 75
+}
+
 def load_user_data(user_id: str) -> dict:
     user_file = os.path.join(USER_DATA_FOLDER, f"{user_id}.json")
     if os.path.exists(user_file):
@@ -83,11 +91,25 @@ def handle_message(update: Update, context: CallbackContext):
         message.reply_text("❌ Нет доступных карточек.")
         return
 
-    limited_cards = [f for f in all_cards if "_лимитированная" in f.lower()]
-    normal_cards = [f for f in all_cards if "_лимитированная" not in f.lower()]
+    cards_by_rarity = {r: [] for r in RARITY_PROBABILITIES}
+    for filename in all_cards:
+        _, rarity = parse_card_filename(filename)
+        rarity = rarity.lower()
+        if rarity in cards_by_rarity:
+            cards_by_rarity[rarity].append(filename)
 
-    roll = random.random()
-    chosen_file = random.choice(limited_cards if limited_cards and roll < 0.005 else normal_cards)
+    rarities = list(RARITY_PROBABILITIES.keys())
+    weights = list(RARITY_PROBABILITIES.values())
+    chosen_rarity = random.choices(rarities, weights=weights, k=1)[0]
+
+    if cards_by_rarity[chosen_rarity]:
+        chosen_file = random.choice(cards_by_rarity[chosen_rarity])
+    else:
+        available = [f for lst in cards_by_rarity.values() for f in lst]
+        if not available:
+            message.reply_text("❌ Нет доступных карточек.")
+            return
+        chosen_file = random.choice(available)
 
     name, rarity = parse_card_filename(chosen_file)
     rarity_cap = rarity.capitalize()
@@ -96,7 +118,7 @@ def handle_message(update: Update, context: CallbackContext):
 
     already_has = any(card["name"] == name for card in user_data["cards"])
     if already_has:
-        points = int(base_points * 1) 
+        points = int(base_points * 1)
         found_msg = "🔁 Повторная карточка!"
     else:
         points = base_points
@@ -121,7 +143,6 @@ def handle_message(update: Update, context: CallbackContext):
             caption=caption,
             parse_mode='Markdown'
         )
-
 
 def mycards_command(update: Update, context: CallbackContext):
     user = update.message.from_user
@@ -154,7 +175,7 @@ def mycards_command(update: Update, context: CallbackContext):
     update.message.reply_text(reply_text)
 
 def main():
-    TOKEN = "7726532835:AAFF55l7B4Pbcc3JmDSF6Ksqzhdh9G466uc"
+    TOKEN = "7726532835:AAFF55l7B4Pbcc3JmDSF6Ksqzhdh9G466uc"  # ← Обязательно замени токен!
     updater = Updater(TOKEN, use_context=True)
     dp = updater.dispatcher
 
@@ -166,3 +187,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+
