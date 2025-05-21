@@ -2,3 +2,4 @@ python-telegram-bot==13.15
 urllib3==1.26.16
 google-auth==1.35.0
 requests==2.31.0
+psycopg2-binary
