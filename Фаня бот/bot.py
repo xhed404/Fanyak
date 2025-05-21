@@ -114,7 +114,8 @@ def handle_message(update: Update, context: CallbackContext):
     name, rarity = parse_card_filename(chosen_file)
     emoji = RARITY_EMOJIS.get(rarity, "🎴")
     
-    points = 5
+    points = RARITY_POINTS.get(rarity, 5)  # начисляем очки в зависимости от редкости
+
     already_has = any(card["name"] == name for card in user_data["cards"])
     if already_has:
         found_msg = "🔁 Повторная карточка!"
