@@ -6,7 +6,7 @@ from telegram import Update
 from telegram.ext import Updater, MessageHandler, Filters, CallbackContext, CommandHandler
 
 CARD_FOLDER = "cards"
-WAIT_HOURS = 0.3
+WAIT_HOURS = 0.15
 
 RARITY_EMOJIS = {
     "обычная": "⭐️",
@@ -155,12 +155,12 @@ def handle_message(update: Update, context: CallbackContext):
             "😔 Вы осмотрелись, но не увидели рядом Фаню.\n\n"
             f"🕐 Возвращайтесь через {hours} час {minutes} мин {seconds} сек."
         )
-        message.reply_text(msg)
+        message.reply_text(msg, reply_to_message_id=message.message_id)
         return
 
     all_cards = [f for f in os.listdir(CARD_FOLDER) if f.lower().endswith((".jpg", ".png"))]
     if not all_cards:
-        message.reply_text("❌ Нет доступных карточек.")
+        message.reply_text("❌ Нет доступных карточек.", reply_to_message_id=message.message_id)
         return
 
     cards_by_rarity = {r: [] for r in RARITY_PROBABILITIES}
@@ -179,7 +179,7 @@ def handle_message(update: Update, context: CallbackContext):
     else:
         available = [f for lst in cards_by_rarity.values() for f in lst]
         if not available:
-            message.reply_text("❌ Нет доступных карточек.")
+            message.reply_text("❌ Нет доступных карточек.", reply_to_message_id=message.message_id)
             return
         chosen_file = random.choice(available)
 
@@ -194,11 +194,14 @@ def handle_message(update: Update, context: CallbackContext):
 
     update_user_score_and_time(user_id, points, now_ts)
 
+    user_data = get_user_data(user_id)
+    total_score = user_data["score"]
+
     caption = (
         f"📸 *{name}*\n"
         f"{emoji} Редкость: *{rarity.capitalize()}*\n"
         f"{found_msg}\n"
-        f"🎁 +{points} очков"
+        f"🎁 +{points} очков  |  🧮 Всего: {total_score}"
     )
 
     with open(os.path.join(CARD_FOLDER, chosen_file), "rb") as img:
@@ -206,7 +209,8 @@ def handle_message(update: Update, context: CallbackContext):
             chat_id=message.chat_id,
             photo=img,
             caption=caption,
-            parse_mode='Markdown'
+            parse_mode='Markdown',
+            reply_to_message_id=message.message_id
         )
 
 def mycards_command(update: Update, context: CallbackContext):
@@ -226,7 +230,7 @@ def mycards_command(update: Update, context: CallbackContext):
     cards = c.fetchall()
 
     if not cards:
-        update.message.reply_text("У вас пока нет карточек 😔")
+        update.message.reply_text("У вас пока нет карточек 😔", reply_to_message_id=update.message.message_id)
         conn.close()
         return
 
@@ -246,10 +250,9 @@ def mycards_command(update: Update, context: CallbackContext):
         name = card["name"]
         rarity = card["rarity"].capitalize()
         count = card["count"]
-        repeat_text = f" (x{count})" if count > 1 else ""
-        reply_text += f"{i}. {name} — {rarity}{repeat_text}\n"
+        reply_text += f"{i}. {name} — {rarity} (x{count})\n"
 
-    update.message.reply_text(reply_text)
+    update.message.reply_text(reply_text, reply_to_message_id=update.message.message_id)
     conn.close()
 
 def main():
@@ -266,6 +269,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
 
