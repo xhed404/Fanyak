@@ -9,7 +9,7 @@ from telegram.ext import Updater, MessageHandler, Filters, CallbackContext, Comm
 CARD_FOLDER = "cards"
 USER_DATA_FOLDER = "data"
 WAIT_HOURS = 0.4
- 
+
 RARITY_EMOJIS = {
     "обычная": "⭐️",
     "редкая": "💎",
@@ -33,15 +33,6 @@ RARITY_PROBABILITIES = {
     "легендарная": 2.95,
     "лимитированная": 0.05
 }
-
-GAMES = {
-    "казино": "🎰",
-    "футбол": "⚽",
-    "баскетбол": "🏀"
-}
-
-GAME_COST = 5
-GAME_WIN_REWARD = 20
 
 def load_user_data(user_id: str) -> dict:
     user_file = os.path.join(USER_DATA_FOLDER, f"{user_id}.json")
@@ -74,32 +65,13 @@ def handle_message(update: Update, context: CallbackContext):
         return
 
     text = message.text.strip().lower()
-    user_id = str(message.from_user.id)
-    user_data = load_user_data(user_id)
-
-    # Обработка игр с эмодзи
-    for keyword, emoji in GAMES.items():
-        if keyword in text:
-            if user_data["score"] < GAME_COST:
-                message.reply_text("😢 Недостаточно очков для игры.")
-                return
-
-            user_data["score"] -= GAME_COST
-            save_user_data(user_id, user_data)
-
-            message.reply_text(emoji)
-
-            if random.random() < 0.5:
-                user_data["score"] += GAME_WIN_REWARD
-                save_user_data(user_id, user_data)
-                message.reply_text(f"🎉 Победа! +{GAME_WIN_REWARD} очков! Теперь у вас {user_data['score']} очков.")
-            else:
-                message.reply_text(f"😞 Проигрыш! Осталось {user_data['score']} очков.")
-            return  # прерываем, чтобы не обрабатывать дальше
-
     if text not in ["фаня", "фаняк"]:
         return
 
+    user = message.from_user
+    user_id = str(user.id)
+
+    user_data = load_user_data(user_id)
     last_time = user_data.get("last_time", 0)
     now_ts = datetime.now().timestamp()
 
@@ -140,18 +112,15 @@ def handle_message(update: Update, context: CallbackContext):
         chosen_file = random.choice(available)
 
     name, rarity = parse_card_filename(chosen_file)
-    rarity_cap = rarity.capitalize()
     emoji = RARITY_EMOJIS.get(rarity, "🎴")
-    base_points = RARITY_POINTS.get(rarity, 0)
-
+    
+    points = 5
     already_has = any(card["name"] == name for card in user_data["cards"])
     if already_has:
-        points = int(base_points * 1)
         found_msg = "🔁 Повторная карточка!"
     else:
-        points = base_points
-        user_data["cards"].append({"name": name, "rarity": rarity_cap})
         found_msg = "🎉 Новая карточка!"
+        user_data["cards"].append({"name": name, "rarity": rarity.capitalize()})
 
     user_data["score"] += points
     user_data["last_time"] = now_ts
@@ -159,7 +128,7 @@ def handle_message(update: Update, context: CallbackContext):
 
     caption = (
         f"📸 *{name}*\n"
-        f"{emoji} Редкость: *{rarity_cap}*\n"
+        f"{emoji} Редкость: *{rarity.capitalize()}*\n"
         f"{found_msg}\n"
         f"🎁 +{points} очков  |  🧮 Всего: {user_data['score']}"
     )
