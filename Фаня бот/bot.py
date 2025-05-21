@@ -1,12 +1,13 @@
 import os
 import random
-import sqlite3
+import psycopg2
 from datetime import datetime
+from collections import Counter
 from telegram import Update
 from telegram.ext import Updater, MessageHandler, Filters, CallbackContext, CommandHandler
 
 CARD_FOLDER = "cards"
-WAIT_HOURS = 0.05
+WAIT_HOURS = 0.15
 
 RARITY_EMOJIS = {
     "обычная": "⭐️",
@@ -32,107 +33,81 @@ RARITY_PROBABILITIES = {
     "лимитированная": 0.05
 }
 
-DB_FILE = "cards_bot.db"
+DB_PARAMS = {
+    'dbname': 'postgres',
+    'user': 'postgres.ohjvqejdhqdvmpinreng',
+    'password': 'Mateoloko17+',
+    'host': 'aws-0-eu-north-1.pooler.supabase.com',
+    'port': 6543
+}
 
-def get_db_connection():
-    conn = sqlite3.connect(DB_FILE)
-    conn.row_factory = sqlite3.Row
-    return conn
+def get_connection():
+    return psycopg2.connect(**DB_PARAMS)
 
 def init_db():
-    conn = get_db_connection()
-    c = conn.cursor()
-    c.execute('''
-        CREATE TABLE IF NOT EXISTS users (
-            user_id TEXT PRIMARY KEY,
-            score INTEGER DEFAULT 0,
-            last_time REAL DEFAULT 0
-        )
-    ''')
-    c.execute('''
-        CREATE TABLE IF NOT EXISTS cards (
-            card_id INTEGER PRIMARY KEY AUTOINCREMENT,
-            name TEXT UNIQUE,
-            rarity TEXT
-        )
-    ''')
-    c.execute('''
-        CREATE TABLE IF NOT EXISTS user_cards (
-            user_id TEXT,
-            card_id INTEGER,
-            count INTEGER DEFAULT 1,
-            PRIMARY KEY (user_id, card_id),
-            FOREIGN KEY(user_id) REFERENCES users(user_id),
-            FOREIGN KEY(card_id) REFERENCES cards(card_id)
-        )
-    ''')
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute("""
+    create table if not exists users (
+        user_id text primary key,
+        score integer not null default 0,
+        last_time double precision not null default 0
+    );
+    """)
+    cur.execute("""
+    create table if not exists cards (
+        user_id text,
+        name text,
+        rarity text,
+        count integer default 1,
+        primary key (user_id, name),
+        foreign key (user_id) references users (user_id)
+    );
+    """)
     conn.commit()
+    cur.close()
     conn.close()
 
-def parse_card_filename(filename: str):
+def load_user_data(user_id: str) -> dict:
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute("select score, last_time from users where user_id = %s", (user_id,))
+    row = cur.fetchone()
+    if row:
+        score, last_time = row
+    else:
+        score, last_time = 0, 0
+        cur.execute("insert into users(user_id, score, last_time) values (%s, %s, %s)", (user_id, score, last_time))
+        conn.commit()
+
+    cur.execute("select name, rarity, count from cards where user_id = %s", (user_id,))
+    cards = [{"name": r[0], "rarity": r[1], "count": r[2]} for r in cur.fetchall()]
+    cur.close()
+    conn.close()
+    return {"score": score, "last_time": last_time, "cards": cards}
+
+def save_user_data(user_id: str, data: dict):
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute("update users set score=%s, last_time=%s where user_id=%s",
+                (data["score"], data["last_time"], user_id))
+    for card in data["cards"]:
+        cur.execute("""
+        insert into cards (user_id, name, rarity, count)
+        values (%s, %s, %s, %s)
+        on conflict (user_id, name) do update set count=cards.count + EXCLUDED.count
+        """, (user_id, card["name"], card["rarity"].lower(), card["count"]))
+    conn.commit()
+    cur.close()
+    conn.close()
+
+def parse_card_filename(filename: str) -> tuple[str, str]:
     base = os.path.splitext(filename)[0]
     if "_" not in base:
         return ("Неизвестная Фаня", "обычная")
     name_part, rarity = base.rsplit("_", 1)
     name = name_part.replace("-", " ").capitalize()
     return name, rarity.lower()
-
-def get_user_data(user_id):
-    conn = get_db_connection()
-    c = conn.cursor()
-    c.execute("SELECT * FROM users WHERE user_id = ?", (user_id,))
-    user = c.fetchone()
-    if user is None:
-        c.execute("INSERT INTO users (user_id) VALUES (?)", (user_id,))
-        conn.commit()
-        user = {"user_id": user_id, "score": 0, "last_time": 0}
-    else:
-        user = dict(user)
-    conn.close()
-    return user
-
-def update_user_score_and_time(user_id, score_delta, now_ts):
-    conn = get_db_connection()
-    c = conn.cursor()
-    c.execute("UPDATE users SET score = score + ?, last_time = ? WHERE user_id = ?", (score_delta, now_ts, user_id))
-    conn.commit()
-    conn.close()
-
-def get_card_id(name, rarity):
-    conn = get_db_connection()
-    c = conn.cursor()
-    c.execute("SELECT card_id FROM cards WHERE name = ?", (name,))
-    card = c.fetchone()
-    if card:
-        card_id = card["card_id"]
-    else:
-        c.execute("INSERT INTO cards (name, rarity) VALUES (?, ?)", (name, rarity))
-        card_id = c.lastrowid
-        conn.commit()
-    conn.close()
-    return card_id
-
-def get_user_card(user_id, card_id):
-    conn = get_db_connection()
-    c = conn.cursor()
-    c.execute("SELECT count FROM user_cards WHERE user_id = ? AND card_id = ?", (user_id, card_id))
-    res = c.fetchone()
-    conn.close()
-    return res["count"] if res else None
-
-def add_or_update_user_card(user_id, card_id):
-    conn = get_db_connection()
-    c = conn.cursor()
-    count = get_user_card(user_id, card_id)
-    if count is None:
-        c.execute("INSERT INTO user_cards (user_id, card_id, count) VALUES (?, ?, 1)", (user_id, card_id))
-        is_new = True
-    else:
-        c.execute("UPDATE user_cards SET count = count + 1 WHERE user_id = ? AND card_id = ?", (user_id, card_id))
-        is_new = False
-    conn.commit()
-    conn.close()
-    return is_new
 
 def handle_message(update: Update, context: CallbackContext):
     message = update.message
@@ -143,24 +118,27 @@ def handle_message(update: Update, context: CallbackContext):
     if text not in ["фаня", "фаняк"]:
         return
 
-    user_id = str(message.from_user.id)
-    user_data = get_user_data(user_id)
+    user = message.from_user
+    user_id = str(user.id)
+
+    user_data = load_user_data(user_id)
+    last_time = user_data.get("last_time", 0)
     now_ts = datetime.now().timestamp()
 
-    if now_ts - user_data["last_time"] < WAIT_HOURS * 3600:
-        remaining = WAIT_HOURS * 3600 - (now_ts - user_data["last_time"])
+    if now_ts - last_time < WAIT_HOURS * 3600:
+        remaining = WAIT_HOURS * 3600 - (now_ts - last_time)
         hours, remainder = divmod(int(remaining), 3600)
         minutes, seconds = divmod(remainder, 60)
         msg = (
             "😔 Вы осмотрелись, но не увидели рядом Фаню.\n\n"
             f"🕐 Возвращайтесь через {hours} час {minutes} мин {seconds} сек."
         )
-        message.reply_text(msg, reply_to_message_id=message.message_id)
+        message.reply_text(msg)
         return
 
     all_cards = [f for f in os.listdir(CARD_FOLDER) if f.lower().endswith((".jpg", ".png"))]
     if not all_cards:
-        message.reply_text("❌ Нет доступных карточек.", reply_to_message_id=message.message_id)
+        message.reply_text("❌ Нет доступных карточек.")
         return
 
     cards_by_rarity = {r: [] for r in RARITY_PROBABILITIES}
@@ -179,29 +157,34 @@ def handle_message(update: Update, context: CallbackContext):
     else:
         available = [f for lst in cards_by_rarity.values() for f in lst]
         if not available:
-            message.reply_text("❌ Нет доступных карточек.", reply_to_message_id=message.message_id)
+            message.reply_text("❌ Нет доступных карточек.")
             return
         chosen_file = random.choice(available)
 
     name, rarity = parse_card_filename(chosen_file)
     emoji = RARITY_EMOJIS.get(rarity, "🎴")
+
     points = RARITY_POINTS.get(rarity, 5)
+    already_has = False
+    for card in user_data["cards"]:
+        if card["name"] == name:
+            already_has = True
+            card["count"] += 1
+            break
+    if not already_has:
+        user_data["cards"].append({"name": name, "rarity": rarity.capitalize(), "count": 1})
 
-    card_id = get_card_id(name, rarity)
-    is_new = add_or_update_user_card(user_id, card_id)
+    found_msg = "🔁 Повторная карточка!" if already_has else "🎉 Новая карточка!"
 
-    found_msg = "🎉 Новая карточка!" if is_new else "🔁 Повторная карточка!"
-
-    update_user_score_and_time(user_id, points, now_ts)
-
-    user_data = get_user_data(user_id)
-    total_score = user_data["score"]
+    user_data["score"] += points
+    user_data["last_time"] = now_ts
+    save_user_data(user_id, user_data)
 
     caption = (
         f"📸 *{name}*\n"
         f"{emoji} Редкость: *{rarity.capitalize()}*\n"
         f"{found_msg}\n"
-        f"🎁 +{points} очков  |  🧮 Всего: {total_score}"
+        f"🎁 +{points} очков  |  🧮 Всего: {user_data['score']}"
     )
 
     with open(os.path.join(CARD_FOLDER, chosen_file), "rb") as img:
@@ -209,55 +192,47 @@ def handle_message(update: Update, context: CallbackContext):
             chat_id=message.chat_id,
             photo=img,
             caption=caption,
-            parse_mode='Markdown',
-            reply_to_message_id=message.message_id
+            parse_mode='Markdown'
         )
 
 def mycards_command(update: Update, context: CallbackContext):
-    user_id = str(update.message.from_user.id)
-    conn = get_db_connection()
-    c = conn.cursor()
-    c.execute("SELECT score FROM users WHERE user_id = ?", (user_id,))
-    user = c.fetchone()
-    score = user["score"] if user else 0
+    user = update.message.from_user
+    user_id = str(user.id)
 
-    c.execute('''
-        SELECT cards.name, cards.rarity, user_cards.count
-        FROM user_cards
-        JOIN cards ON user_cards.card_id = cards.card_id
-        WHERE user_cards.user_id = ?
-    ''', (user_id,))
-    cards = c.fetchall()
+    user_data = load_user_data(user_id)
+    cards = user_data.get("cards", [])
+    score = user_data.get("score", 0)
 
     if not cards:
-        update.message.reply_text("У вас пока нет карточек 😔", reply_to_message_id=update.message.message_id)
-        conn.close()
+        update.message.reply_text("У вас пока нет карточек 😔")
         return
 
-    rarity_counter = {}
+    rarity_counter = Counter()
     for card in cards:
-        r = card["rarity"].lower()
-        rarity_counter[r] = rarity_counter.get(r, 0) + card["count"]
+        rarity_counter[card["rarity"].lower()] += card["count"]
 
     rarity_stats = "\n".join(
         f"{RARITY_EMOJIS.get(r, '🎴')} {r.capitalize()} — {count}"
         for r, count in rarity_counter.items()
     )
 
-    reply_text = f"🎴 Ваши карточки (всего очков: {score}):\n\n{rarity_stats}\n\n"
+    reply_text = (
+        f"🎴 Ваши карточки (всего очков: {score}):\n\n"
+        f"{rarity_stats}\n\n"
+    )
 
     for i, card in enumerate(cards, 1):
-        name = card["name"]
-        rarity = card["rarity"].capitalize()
-        count = card["count"]
+        name = card.get("name", "Неизвестная Фаня")
+        rarity = card.get("rarity", "Обычная")
+        count = card.get("count", 1)
         reply_text += f"{i}. {name} — {rarity} (x{count})\n"
 
-    update.message.reply_text(reply_text, reply_to_message_id=update.message.message_id)
-    conn.close()
+    update.message.reply_text(reply_text)
 
 def main():
-    init_db()
     TOKEN = "7726532835:AAFF55l7B4Pbcc3JmDSF6Ksqzhdh9G466uc"
+    init_db()
+
     updater = Updater(TOKEN, use_context=True)
     dp = updater.dispatcher
 
@@ -269,7 +244,6 @@ def main():
 
 if __name__ == "__main__":
     main()
-
 
 
 
