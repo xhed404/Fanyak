@@ -9,7 +9,7 @@ from telegram.ext import Updater, MessageHandler, Filters, CallbackContext, Comm
 CARD_FOLDER = "cards"
 USER_DATA_FOLDER = "data"
 WAIT_HOURS = 0.4
-
+ 
 RARITY_EMOJIS = {
     "обычная": "⭐️",
     "редкая": "💎",
