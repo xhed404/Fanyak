@@ -86,17 +86,19 @@ def load_user_data(user_id: str) -> dict:
     conn.close()
     return {"score": score, "last_time": last_time, "cards": cards}
 
-def save_user_data(user_id: str, data: dict):
+def save_user_data(user_id: str, data: dict, card_to_update: dict = None):
     conn = get_connection()
     cur = conn.cursor()
     cur.execute("update users set score=%s, last_time=%s where user_id=%s",
                 (data["score"], data["last_time"], user_id))
-    for card in data["cards"]:
+
+    if card_to_update:
         cur.execute("""
         insert into cards (user_id, name, rarity, count)
         values (%s, %s, %s, %s)
-        on conflict (user_id, name) do update set count=cards.count + EXCLUDED.count
-        """, (user_id, card["name"], card["rarity"].lower(), card["count"]))
+        on conflict (user_id, name) do update set count = cards.count + EXCLUDED.count
+        """, (user_id, card_to_update["name"], card_to_update["rarity"].lower(), card_to_update["count"]))
+
     conn.commit()
     cur.close()
     conn.close()
@@ -169,16 +171,13 @@ def handle_message(update: Update, context: CallbackContext):
     for card in user_data["cards"]:
         if card["name"] == name:
             already_has = True
-            card["count"] += 1
             break
-    if not already_has:
-        user_data["cards"].append({"name": name, "rarity": rarity.capitalize(), "count": 1})
 
     found_msg = "🔁 Повторная карточка!" if already_has else "🎉 Новая карточка!"
-
     user_data["score"] += points
     user_data["last_time"] = now_ts
-    save_user_data(user_id, user_data)
+
+    save_user_data(user_id, user_data, {"name": name, "rarity": rarity.capitalize(), "count": 1})
 
     caption = (
         f"📸 *{name}*\n"
@@ -244,6 +243,8 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+
 
 
 
