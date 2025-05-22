@@ -1,6 +1,7 @@
 import os
 import random
 import psycopg2
+from psycopg2 import pool
 from datetime import datetime
 from collections import Counter
 from telegram import Update
@@ -41,67 +42,91 @@ DB_PARAMS = {
     'port': 6543
 }
 
+conn_pool = None  # пул соединений
+
+def init_connection_pool():
+    global conn_pool
+    if conn_pool is None:
+        conn_pool = pool.SimpleConnectionPool(
+            1, 10, 
+            **DB_PARAMS
+        )
+
 def get_connection():
-    return psycopg2.connect(**DB_PARAMS)
+    global conn_pool
+    if conn_pool is None:
+        init_connection_pool()
+    return conn_pool.getconn()
+
+def release_connection(conn):
+    global conn_pool
+    if conn_pool is not None and conn is not None:
+        conn_pool.putconn(conn)
 
 def init_db():
     conn = get_connection()
     cur = conn.cursor()
-    cur.execute("""
-    create table if not exists users (
-        user_id text primary key,
-        score integer not null default 0,
-        last_time double precision not null default 0
-    );
-    """)
-    cur.execute("""
-    create table if not exists cards (
-        user_id text,
-        name text,
-        rarity text,
-        count integer default 1,
-        primary key (user_id, name),
-        foreign key (user_id) references users (user_id)
-    );
-    """)
-    conn.commit()
-    cur.close()
-    conn.close()
+    try:
+        cur.execute("""
+        create table if not exists users (
+            user_id text primary key,
+            score integer not null default 0,
+            last_time double precision not null default 0
+        );
+        """)
+        cur.execute("""
+        create table if not exists cards (
+            user_id text,
+            name text,
+            rarity text,
+            count integer default 1,
+            primary key (user_id, name),
+            foreign key (user_id) references users (user_id)
+        );
+        """)
+        conn.commit()
+    finally:
+        cur.close()
+        release_connection(conn)
 
 def load_user_data(user_id: str) -> dict:
     conn = get_connection()
     cur = conn.cursor()
-    cur.execute("select score, last_time from users where user_id = %s", (user_id,))
-    row = cur.fetchone()
-    if row:
-        score, last_time = row
-    else:
-        score, last_time = 0, 0
-        cur.execute("insert into users(user_id, score, last_time) values (%s, %s, %s)", (user_id, score, last_time))
-        conn.commit()
+    try:
+        cur.execute("select score, last_time from users where user_id = %s", (user_id,))
+        row = cur.fetchone()
+        if row:
+            score, last_time = row
+        else:
+            score, last_time = 0, 0
+            cur.execute("insert into users(user_id, score, last_time) values (%s, %s, %s)", (user_id, score, last_time))
+            conn.commit()
 
-    cur.execute("select name, rarity, count from cards where user_id = %s", (user_id,))
-    cards = [{"name": r[0], "rarity": r[1], "count": r[2]} for r in cur.fetchall()]
-    cur.close()
-    conn.close()
+        cur.execute("select name, rarity, count from cards where user_id = %s", (user_id,))
+        cards = [{"name": r[0], "rarity": r[1], "count": r[2]} for r in cur.fetchall()]
+    finally:
+        cur.close()
+        release_connection(conn)
     return {"score": score, "last_time": last_time, "cards": cards}
 
 def save_user_data(user_id: str, data: dict, card_to_update: dict = None):
     conn = get_connection()
     cur = conn.cursor()
-    cur.execute("update users set score=%s, last_time=%s where user_id=%s",
-                (data["score"], data["last_time"], user_id))
+    try:
+        cur.execute("update users set score=%s, last_time=%s where user_id=%s",
+                    (data["score"], data["last_time"], user_id))
 
-    if card_to_update:
-        cur.execute("""
-        insert into cards (user_id, name, rarity, count)
-        values (%s, %s, %s, %s)
-        on conflict (user_id, name) do update set count = cards.count + EXCLUDED.count
-        """, (user_id, card_to_update["name"], card_to_update["rarity"].lower(), card_to_update["count"]))
+        if card_to_update:
+            cur.execute("""
+            insert into cards (user_id, name, rarity, count)
+            values (%s, %s, %s, %s)
+            on conflict (user_id, name) do update set count = cards.count + EXCLUDED.count
+            """, (user_id, card_to_update["name"], card_to_update["rarity"].lower(), card_to_update["count"]))
 
-    conn.commit()
-    cur.close()
-    conn.close()
+        conn.commit()
+    finally:
+        cur.close()
+        release_connection(conn)
 
 def parse_card_filename(filename: str) -> tuple[str, str]:
     base = os.path.splitext(filename)[0]
@@ -230,6 +255,7 @@ def mycards_command(update: Update, context: CallbackContext):
 
 def main():
     TOKEN = "7726532835:AAFF55l7B4Pbcc3JmDSF6Ksqzhdh9G466uc"
+    init_connection_pool()
     init_db()
 
     updater = Updater(TOKEN, use_context=True)
@@ -243,8 +269,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
-
-
-
-
