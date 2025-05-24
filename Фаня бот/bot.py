@@ -8,7 +8,7 @@ from telegram import Update
 from telegram.ext import Updater, MessageHandler, Filters, CallbackContext, CommandHandler
 
 CARD_FOLDER = "cards"
-WAIT_HOURS = 0.15
+WAIT_HOURS = 0.01
 
 RARITY_EMOJIS = {
     "обычная": "⭐️",
