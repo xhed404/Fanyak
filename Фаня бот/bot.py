@@ -4,11 +4,12 @@ import psycopg2
 from psycopg2 import pool
 from datetime import datetime
 from collections import Counter
-from telegram import Update
+from telegram import Update, ParseMode
 from telegram.ext import Updater, MessageHandler, Filters, CallbackContext, CommandHandler
 
 CARD_FOLDER = "cards"
 WAIT_HOURS = 0.5
+CUBE_WAIT_SECONDS = 15 * 60 
 
 RARITY_EMOJIS = {
     "обычная": "⭐️",
@@ -56,8 +57,7 @@ def get_connection():
     return conn_pool.getconn()
 
 def release_connection(conn):
-    global conn_pool
-    if conn_pool is not None and conn is not None:
+    if conn_pool and conn:
         conn_pool.putconn(conn)
 
 def init_db():
@@ -65,21 +65,23 @@ def init_db():
     cur = conn.cursor()
     try:
         cur.execute("""
-        create table if not exists users (
-            user_id text primary key,
-            score integer not null default 0,
-            last_time double precision not null default 0
-        );
+            create table if not exists users (
+                user_id text primary key,
+                username text,
+                score integer not null default 0,
+                last_time double precision not null default 0,
+                last_cube_time double precision not null default 0
+            );
         """)
         cur.execute("""
-        create table if not exists cards (
-            user_id text,
-            name text,
-            rarity text,
-            count integer default 1,
-            primary key (user_id, name),
-            foreign key (user_id) references users (user_id)
-        );
+            create table if not exists cards (
+                user_id text,
+                name text,
+                rarity text,
+                count integer default 1,
+                primary key (user_id, name),
+                foreign key (user_id) references users (user_id)
+            );
         """)
         conn.commit()
     finally:
@@ -90,13 +92,16 @@ def load_user_data(user_id: str) -> dict:
     conn = get_connection()
     cur = conn.cursor()
     try:
-        cur.execute("select score, last_time from users where user_id = %s", (user_id,))
+        cur.execute("select score, last_time, last_cube_time from users where user_id = %s", (user_id,))
         row = cur.fetchone()
         if row:
-            score, last_time = row
+            score, last_time, last_cube_time = row
         else:
-            score, last_time = 0, 0
-            cur.execute("insert into users(user_id, score, last_time) values (%s, %s, %s)", (user_id, score, last_time))
+            score, last_time, last_cube_time = 0, 0, 0
+            cur.execute(
+                "insert into users(user_id, username, score, last_time, last_cube_time) values (%s, %s, %s, %s, %s)",
+                (user_id, "", score, last_time, last_cube_time)
+            )
             conn.commit()
 
         cur.execute("select name, rarity, count from cards where user_id = %s", (user_id,))
@@ -104,22 +109,23 @@ def load_user_data(user_id: str) -> dict:
     finally:
         cur.close()
         release_connection(conn)
-    return {"score": score, "last_time": last_time, "cards": cards}
 
-def save_user_data(user_id: str, data: dict, card_to_update: dict = None):
+    return {"score": score, "last_time": last_time, "last_cube_time": last_cube_time, "cards": cards}
+
+def save_user_data(user_id: str, data: dict, card_to_update: dict = None, username: str = None):
     conn = get_connection()
     cur = conn.cursor()
     try:
-        cur.execute("update users set score=%s, last_time=%s where user_id=%s",
-                    (data["score"], data["last_time"], user_id))
+        cur.execute("""
+            update users set score=%s, last_time=%s, last_cube_time=%s, username=%s where user_id=%s
+        """, (data["score"], data["last_time"], data.get("last_cube_time", 0), username, user_id))
 
         if card_to_update:
             cur.execute("""
-            insert into cards (user_id, name, rarity, count)
-            values (%s, %s, %s, %s)
-            on conflict (user_id, name) do update set count = cards.count + EXCLUDED.count
+                insert into cards (user_id, name, rarity, count)
+                values (%s, %s, %s, %s)
+                on conflict (user_id, name) do update set count = cards.count + EXCLUDED.count
             """, (user_id, card_to_update["name"], card_to_update["rarity"].lower(), card_to_update["count"]))
-
         conn.commit()
     finally:
         cur.close()
@@ -141,39 +147,33 @@ def handle_message(update: Update, context: CallbackContext):
     text = message.text.strip().lower()
     user = message.from_user
     user_id = str(user.id)
+    username = user.username or ""
 
-    # Кубы фаня <сумма очков>
     if text.startswith("кубы фаня"):
-        parts = text.split()
-        if len(parts) != 3 or not parts[2].isdigit():
-            message.reply_text("⚠️ Используйте: кубы фаня <сумма очков>, например: `кубы фаня 10`", parse_mode='Markdown')
-            return
-
-        bet = int(parts[2])
-        if bet <= 0:
-            message.reply_text("⚠️ Ставка должна быть больше нуля.")
+        try:
+            amount = int(text.split()[-1])
+        except:
+            message.reply_text("⚠️ Формат: 'кубы фаня сумма'")
             return
 
         user_data = load_user_data(user_id)
-        if bet > user_data["score"]:
-            message.reply_text(f"😕 У вас недостаточно очков. Ваш счёт: {user_data['score']}")
+        now = datetime.now().timestamp()
+
+        if now - user_data.get("last_cube_time", 0) < CUBE_WAIT_SECONDS:
+            remaining = CUBE_WAIT_SECONDS - (now - user_data.get("last_cube_time", 0))
+            mins, secs = divmod(int(remaining), 60)
+            message.reply_text(f"⏳ Подождите {mins} мин {secs} сек перед следующим броском.")
             return
 
-        roll = random.randint(1, 6)
-        win = roll > 3
+        if amount <= 0 or amount > user_data["score"]:
+            message.reply_text("❌ Недопустимая сумма для ставки.")
+            return
 
-        if win:
-            gained = int(bet * 1.5)
-            user_data["score"] += gained
-            result = f"🎲 Выпало: *{roll}* — вы *выиграли*! +{gained} очков."
-        else:
-            user_data["score"] -= bet
-            result = f"🎲 Выпало: *{roll}* — вы *проиграли*. -{bet} очков."
-
-        save_user_data(user_id, user_data)
-        message.reply_text(
-            f"{result}\n💰 Ваш новый счёт: {user_data['score']}",
-            parse_mode='Markdown'
+        dice_msg = message.reply_dice()
+        context.job_queue.run_once(
+            callback=handle_dice_result,
+            when=3,
+            context={"user_id": user_id, "chat_id": message.chat_id, "amount": amount, "username": username, "dice_msg_id": dice_msg.message_id}
         )
         return
 
@@ -203,7 +203,6 @@ def handle_message(update: Update, context: CallbackContext):
     cards_by_rarity = {r: [] for r in RARITY_PROBABILITIES}
     for filename in all_cards:
         _, rarity = parse_card_filename(filename)
-        rarity = rarity.lower()
         if rarity in cards_by_rarity:
             cards_by_rarity[rarity].append(filename)
 
@@ -211,15 +210,7 @@ def handle_message(update: Update, context: CallbackContext):
     weights = list(RARITY_PROBABILITIES.values())
     chosen_rarity = random.choices(rarities, weights=weights, k=1)[0]
 
-    if cards_by_rarity[chosen_rarity]:
-        chosen_file = random.choice(cards_by_rarity[chosen_rarity])
-    else:
-        available = [f for lst in cards_by_rarity.values() for f in lst]
-        if not available:
-            message.reply_text("❌ Нет доступных карточек.")
-            return
-        chosen_file = random.choice(available)
-
+    chosen_file = random.choice(cards_by_rarity.get(chosen_rarity, all_cards))
     name, rarity = parse_card_filename(chosen_file)
     emoji = RARITY_EMOJIS.get(rarity, "🎴")
 
@@ -230,7 +221,7 @@ def handle_message(update: Update, context: CallbackContext):
     user_data["score"] += points
     user_data["last_time"] = now_ts
 
-    save_user_data(user_id, user_data, {"name": name, "rarity": rarity.capitalize(), "count": 1})
+    save_user_data(user_id, user_data, {"name": name, "rarity": rarity.capitalize(), "count": 1}, username)
 
     caption = (
         f"📸 *{name}*\n"
@@ -240,17 +231,38 @@ def handle_message(update: Update, context: CallbackContext):
     )
 
     with open(os.path.join(CARD_FOLDER, chosen_file), "rb") as img:
-        context.bot.send_photo(
-            chat_id=message.chat_id,
-            photo=img,
-            caption=caption,
-            parse_mode='Markdown'
-        )
+        context.bot.send_photo(chat_id=message.chat_id, photo=img, caption=caption, parse_mode='Markdown')
+
+def handle_dice_result(context: CallbackContext):
+    job = context.job
+    data = job.context
+    user_id = data["user_id"]
+    chat_id = data["chat_id"]
+    amount = data["amount"]
+    username = data["username"]
+
+    updates = context.bot.get_chat(chat_id).get_message(data["dice_msg_id"])
+    dice_value = updates.dice.value if updates and updates.dice else 1
+
+    user_data = load_user_data(user_id)
+    now = datetime.now().timestamp()
+    result = ""
+
+    if dice_value > 3:
+        win = int(amount * 1.5)
+        user_data["score"] += win
+        result = f"🎉 Победа! Выпало {dice_value}.\nВы выиграли {win} очков!"
+    else:
+        user_data["score"] -= amount
+        result = f"💀 Проигрыш! Выпало {dice_value}.\nВы потеряли {amount} очков."
+
+    user_data["last_cube_time"] = now
+    save_user_data(user_id, user_data, username=username)
+    context.bot.send_message(chat_id=chat_id, text=f"{result}\n🧮 Новый счёт: {user_data['score']}")
 
 def mycards_command(update: Update, context: CallbackContext):
     user = update.message.from_user
     user_id = str(user.id)
-
     user_data = load_user_data(user_id)
     cards = user_data.get("cards", [])
     score = user_data.get("score", 0)
@@ -268,16 +280,9 @@ def mycards_command(update: Update, context: CallbackContext):
         for r, count in rarity_counter.items()
     )
 
-    reply_text = (
-        f"🎴 Ваши карточки (всего очков: {score}):\n\n"
-        f"{rarity_stats}\n\n"
-    )
-
+    reply_text = f"🎴 Ваши карточки (всего очков: {score}):\n\n{rarity_stats}\n\n"
     for i, card in enumerate(cards, 1):
-        name = card.get("name", "Неизвестная Фаня")
-        rarity = card.get("rarity", "Обычная")
-        count = card.get("count", 1)
-        reply_text += f"{i}. {name} — {rarity} (x{count})\n"
+        reply_text += f"{i}. {card['name']} — {card['rarity']} (x{card['count']})\n"
 
     update.message.reply_text(reply_text)
 
@@ -285,24 +290,21 @@ def top_command(update: Update, context: CallbackContext):
     conn = get_connection()
     cur = conn.cursor()
     try:
-        cur.execute("SELECT user_id, score FROM users ORDER BY score DESC LIMIT 5")
-        top_users = cur.fetchall()
+        cur.execute("select user_id, username, score from users order by score desc limit 5")
+        rows = cur.fetchall()
     finally:
         cur.close()
         release_connection(conn)
 
-    if not top_users:
-        update.message.reply_text("Пока что никто не набрал очков 😔")
-        return
+    text = "🏆 Топ 5 игроков:\n\n"
+    for i, (uid, uname, score) in enumerate(rows, 1):
+        name = f"@{uname}" if uname else f"[user](tg://user?id={uid})"
+        text += f"{i}. {name} — {score} очков\n"
 
-    msg = "🏆 *Топ 5 пользователей по очкам:*\n\n"
-    for i, (user_id, score) in enumerate(top_users, 1):
-        msg += f"{i}. ID: `{user_id}` — {score} очков\n"
-
-    update.message.reply_text(msg, parse_mode='Markdown')
+    update.message.reply_text(text, parse_mode=ParseMode.MARKDOWN)
 
 def main():
-    TOKEN = "7726532835:AAFF55l7B4Pbcc3JmDSF6Ksqzhdh9G466uc"  
+    TOKEN = "7726532835:AAFF55l7B4Pbcc3JmDSF6Ksqzhdh9G466uc"
     init_connection_pool()
     init_db()
 
@@ -318,3 +320,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+
