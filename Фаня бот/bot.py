@@ -9,7 +9,7 @@ from telegram.ext import Updater, MessageHandler, Filters, CallbackContext, Comm
 
 CARD_FOLDER = "cards"
 WAIT_HOURS = 0.5
-CUBE_WAIT_SECONDS = 15 * 60 
+CUBE_WAIT_SECONDS = 15 * 60  
 
 RARITY_EMOJIS = {
     "обычная": "⭐️",
@@ -65,22 +65,22 @@ def init_db():
     cur = conn.cursor()
     try:
         cur.execute("""
-            create table if not exists users (
-                user_id text primary key,
-                username text,
-                score integer not null default 0,
-                last_time double precision not null default 0,
-                last_cube_time double precision not null default 0
+            CREATE TABLE IF NOT EXISTS users (
+                user_id TEXT PRIMARY KEY,
+                username TEXT,
+                score INTEGER NOT NULL DEFAULT 0,
+                last_time DOUBLE PRECISION NOT NULL DEFAULT 0,
+                last_cube_time DOUBLE PRECISION NOT NULL DEFAULT 0
             );
         """)
         cur.execute("""
-            create table if not exists cards (
-                user_id text,
-                name text,
-                rarity text,
-                count integer default 1,
-                primary key (user_id, name),
-                foreign key (user_id) references users (user_id)
+            CREATE TABLE IF NOT EXISTS cards (
+                user_id TEXT,
+                name TEXT,
+                rarity TEXT,
+                count INTEGER DEFAULT 1,
+                PRIMARY KEY (user_id, name),
+                FOREIGN KEY (user_id) REFERENCES users (user_id)
             );
         """)
         conn.commit()
@@ -88,44 +88,43 @@ def init_db():
         cur.close()
         release_connection(conn)
 
-
 def load_user_data(user_id: str) -> dict:
     conn = get_connection()
     cur = conn.cursor()
     try:
-        cur.execute("select score, last_time, last_cube_time from users where user_id = %s", (user_id,))
+        cur.execute("SELECT score, last_time, last_cube_time, username FROM users WHERE user_id = %s", (user_id,))
         row = cur.fetchone()
         if row:
-            score, last_time, last_cube_time = row
+            score, last_time, last_cube_time, username = row
         else:
-            score, last_time, last_cube_time = 0, 0, 0
+            score, last_time, last_cube_time, username = 0, 0, 0, ""
             cur.execute(
-                "insert into users(user_id, username, score, last_time, last_cube_time) values (%s, %s, %s, %s, %s)",
-                (user_id, "", score, last_time, last_cube_time)
+                "INSERT INTO users(user_id, username, score, last_time, last_cube_time) VALUES (%s, %s, %s, %s, %s)",
+                (user_id, username, score, last_time, last_cube_time)
             )
             conn.commit()
 
-        cur.execute("select name, rarity, count from cards where user_id = %s", (user_id,))
+        cur.execute("SELECT name, rarity, count FROM cards WHERE user_id = %s", (user_id,))
         cards = [{"name": r[0], "rarity": r[1], "count": r[2]} for r in cur.fetchall()]
     finally:
         cur.close()
         release_connection(conn)
 
-    return {"score": score, "last_time": last_time, "last_cube_time": last_cube_time, "cards": cards}
+    return {"score": score, "last_time": last_time, "last_cube_time": last_cube_time, "cards": cards, "username": username}
 
 def save_user_data(user_id: str, data: dict, card_to_update: dict = None, username: str = None):
     conn = get_connection()
     cur = conn.cursor()
     try:
         cur.execute("""
-            update users set score=%s, last_time=%s, last_cube_time=%s, username=%s where user_id=%s
+            UPDATE users SET score=%s, last_time=%s, last_cube_time=%s, username=%s WHERE user_id=%s
         """, (data["score"], data["last_time"], data.get("last_cube_time", 0), username, user_id))
 
         if card_to_update:
             cur.execute("""
-                insert into cards (user_id, name, rarity, count)
-                values (%s, %s, %s, %s)
-                on conflict (user_id, name) do update set count = cards.count + EXCLUDED.count
+                INSERT INTO cards (user_id, name, rarity, count)
+                VALUES (%s, %s, %s, %s)
+                ON CONFLICT (user_id, name) DO UPDATE SET count = cards.count + EXCLUDED.count
             """, (user_id, card_to_update["name"], card_to_update["rarity"].lower(), card_to_update["count"]))
         conn.commit()
     finally:
@@ -171,10 +170,12 @@ def handle_message(update: Update, context: CallbackContext):
             return
 
         dice_msg = message.reply_dice()
+        dice_value = dice_msg.dice.value if dice_msg.dice else random.randint(1, 6)
+
         context.job_queue.run_once(
             callback=handle_dice_result,
             when=3,
-            context={"user_id": user_id, "chat_id": message.chat_id, "amount": amount, "username": username, "dice_msg_id": dice_msg.message_id}
+            context={"user_id": user_id, "chat_id": message.chat_id, "amount": amount, "username": username, "dice_value": dice_value}
         )
         return
 
@@ -232,7 +233,7 @@ def handle_message(update: Update, context: CallbackContext):
     )
 
     with open(os.path.join(CARD_FOLDER, chosen_file), "rb") as img:
-        context.bot.send_photo(chat_id=message.chat_id, photo=img, caption=caption, parse_mode='Markdown')
+        context.bot.send_photo(chat_id=message.chat_id, photo=img, caption=caption, parse_mode=ParseMode.MARKDOWN)
 
 def handle_dice_result(context: CallbackContext):
     job = context.job
@@ -241,13 +242,7 @@ def handle_dice_result(context: CallbackContext):
     chat_id = data["chat_id"]
     amount = data["amount"]
     username = data["username"]
-    dice_msg_id = data["dice_msg_id"]
-
-    try:
-        updates = context.bot.get_chat(chat_id).get_message(dice_msg_id)
-        dice_value = updates.dice.value if updates.dice else 1
-    except Exception:
-        dice_value = random.randint(1, 6) 
+    dice_value = data.get("dice_value", random.randint(1, 6))
 
     user_data = load_user_data(user_id)
     now = datetime.now().timestamp()
@@ -263,7 +258,6 @@ def handle_dice_result(context: CallbackContext):
     user_data["last_cube_time"] = now
     save_user_data(user_id, user_data, username=username)
     context.bot.send_message(chat_id=chat_id, text=f"{result}\n🧮 Новый счёт: {user_data['score']}")
-
 
 def mycards_command(update: Update, context: CallbackContext):
     user = update.message.from_user
@@ -295,7 +289,7 @@ def top_command(update: Update, context: CallbackContext):
     conn = get_connection()
     cur = conn.cursor()
     try:
-        cur.execute("select user_id, username, score from users order by score desc limit 5")
+        cur.execute("SELECT user_id, username, score FROM users ORDER BY score DESC LIMIT 5")
         rows = cur.fetchall()
     finally:
         cur.close()
@@ -325,5 +319,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
-
