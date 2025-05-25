@@ -42,15 +42,12 @@ DB_PARAMS = {
     'port': 6543
 }
 
-conn_pool = None  # пул соединений
+conn_pool = None
 
 def init_connection_pool():
     global conn_pool
     if conn_pool is None:
-        conn_pool = pool.SimpleConnectionPool(
-            1, 10, 
-            **DB_PARAMS
-        )
+        conn_pool = pool.SimpleConnectionPool(1, 10, **DB_PARAMS)
 
 def get_connection():
     global conn_pool
@@ -142,11 +139,46 @@ def handle_message(update: Update, context: CallbackContext):
         return
 
     text = message.text.strip().lower()
-    if text not in ["фаня", "фаняк"]:
-        return
-
     user = message.from_user
     user_id = str(user.id)
+
+    # Кубы фаня <сумма очков>
+    if text.startswith("кубы фаня"):
+        parts = text.split()
+        if len(parts) != 3 or not parts[2].isdigit():
+            message.reply_text("⚠️ Используйте: кубы фаня <сумма очков>, например: `кубы фаня 10`", parse_mode='Markdown')
+            return
+
+        bet = int(parts[2])
+        if bet <= 0:
+            message.reply_text("⚠️ Ставка должна быть больше нуля.")
+            return
+
+        user_data = load_user_data(user_id)
+        if bet > user_data["score"]:
+            message.reply_text(f"😕 У вас недостаточно очков. Ваш счёт: {user_data['score']}")
+            return
+
+        roll = random.randint(1, 6)
+        win = roll > 3
+
+        if win:
+            gained = int(bet * 1.5)
+            user_data["score"] += gained
+            result = f"🎲 Выпало: *{roll}* — вы *выиграли*! +{gained} очков."
+        else:
+            user_data["score"] -= bet
+            result = f"🎲 Выпало: *{roll}* — вы *проиграли*. -{bet} очков."
+
+        save_user_data(user_id, user_data)
+        message.reply_text(
+            f"{result}\n💰 Ваш новый счёт: {user_data['score']}",
+            parse_mode='Markdown'
+        )
+        return
+
+    if text not in ["фаня", "фаняк"]:
+        return
 
     user_data = load_user_data(user_id)
     last_time = user_data.get("last_time", 0)
@@ -192,11 +224,7 @@ def handle_message(update: Update, context: CallbackContext):
     emoji = RARITY_EMOJIS.get(rarity, "🎴")
 
     points = RARITY_POINTS.get(rarity, 5)
-    already_has = False
-    for card in user_data["cards"]:
-        if card["name"] == name:
-            already_has = True
-            break
+    already_has = any(card["name"] == name for card in user_data["cards"])
 
     found_msg = "🔁 Повторная карточка!" if already_has else "🎉 Новая карточка!"
     user_data["score"] += points
@@ -253,8 +281,28 @@ def mycards_command(update: Update, context: CallbackContext):
 
     update.message.reply_text(reply_text)
 
+def top_command(update: Update, context: CallbackContext):
+    conn = get_connection()
+    cur = conn.cursor()
+    try:
+        cur.execute("SELECT user_id, score FROM users ORDER BY score DESC LIMIT 5")
+        top_users = cur.fetchall()
+    finally:
+        cur.close()
+        release_connection(conn)
+
+    if not top_users:
+        update.message.reply_text("Пока что никто не набрал очков 😔")
+        return
+
+    msg = "🏆 *Топ 5 пользователей по очкам:*\n\n"
+    for i, (user_id, score) in enumerate(top_users, 1):
+        msg += f"{i}. ID: `{user_id}` — {score} очков\n"
+
+    update.message.reply_text(msg, parse_mode='Markdown')
+
 def main():
-    TOKEN = "7726532835:AAFF55l7B4Pbcc3JmDSF6Ksqzhdh9G466uc"
+    TOKEN = "7726532835:AAFF55l7B4Pbcc3JmDSF6Ksqzhdh9G466uc"  
     init_connection_pool()
     init_db()
 
@@ -262,6 +310,7 @@ def main():
     dp = updater.dispatcher
 
     dp.add_handler(CommandHandler("mycards", mycards_command))
+    dp.add_handler(CommandHandler("top", top_command))
     dp.add_handler(MessageHandler(Filters.text & ~Filters.command, handle_message))
 
     updater.start_polling()
