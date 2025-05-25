@@ -88,6 +88,7 @@ def init_db():
         cur.close()
         release_connection(conn)
 
+
 def load_user_data(user_id: str) -> dict:
     conn = get_connection()
     cur = conn.cursor()
@@ -240,13 +241,16 @@ def handle_dice_result(context: CallbackContext):
     chat_id = data["chat_id"]
     amount = data["amount"]
     username = data["username"]
+    dice_msg_id = data["dice_msg_id"]
 
-    updates = context.bot.get_chat(chat_id).get_message(data["dice_msg_id"])
-    dice_value = updates.dice.value if updates and updates.dice else 1
+    try:
+        updates = context.bot.get_chat(chat_id).get_message(dice_msg_id)
+        dice_value = updates.dice.value if updates.dice else 1
+    except Exception:
+        dice_value = random.randint(1, 6) 
 
     user_data = load_user_data(user_id)
     now = datetime.now().timestamp()
-    result = ""
 
     if dice_value > 3:
         win = int(amount * 1.5)
@@ -259,6 +263,7 @@ def handle_dice_result(context: CallbackContext):
     user_data["last_cube_time"] = now
     save_user_data(user_id, user_data, username=username)
     context.bot.send_message(chat_id=chat_id, text=f"{result}\n🧮 Новый счёт: {user_data['score']}")
+
 
 def mycards_command(update: Update, context: CallbackContext):
     user = update.message.from_user
