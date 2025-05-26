@@ -273,6 +273,29 @@ def handle_dice_result(context: CallbackContext):
 def start(update: Update, context: CallbackContext):
     update.message.reply_text("Привет!")
 
+def top(update: Update, context: CallbackContext):
+    conn = get_connection()
+    cur = conn.cursor()
+    try:
+
+        cur.execute("SELECT username, score FROM users ORDER BY score DESC LIMIT 10;")
+        rows = cur.fetchall()
+        
+        if not rows:
+            update.message.reply_text("Пока нет игроков с очками.")
+            return
+
+        msg_lines = ["🏆 Топ игроков по очкам:"]
+        for i, (username, score) in enumerate(rows, 1):
+            display_name = username if username else "Пользователь без имени"
+            msg_lines.append(f"{i}. {display_name} — {score} очков")
+        
+        update.message.reply_text("\n".join(msg_lines))
+    finally:
+        cur.close()
+        release_connection(conn)
+
+
 def main():
     init_connection_pool()
     init_db()
@@ -282,12 +305,15 @@ def main():
 
     dp = updater.dispatcher
     dp.add_handler(CommandHandler("start", start))
+    dp.add_handler(CommandHandler("top", top))  # <- вот здесь добавляем команду /top
     dp.add_handler(MessageHandler(Filters.text & (~Filters.command), handle_message))
 
     updater.start_polling()
     updater.idle()
 
+
 if __name__ == "__main__":
     main()
+
 
 
