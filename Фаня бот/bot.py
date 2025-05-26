@@ -40,11 +40,12 @@ RARITY_PROBABILITIES = {
 
 DB_PARAMS = {
     'dbname': 'postgres',
-    'user': 'postgres.iqbkiskngitgyfppzykp',
+    'user': 'postgres.ohjvqejdhqdvmpinreng',
     'password': 'Mateoloko17+',
     'host': 'aws-0-eu-north-1.pooler.supabase.com',
     'port': 6543
 }
+
 
 conn_pool = None
 
