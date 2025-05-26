@@ -6,6 +6,7 @@ from datetime import datetime
 from collections import Counter
 from telegram import Update, ParseMode
 from telegram.ext import Updater, MessageHandler, Filters, CallbackContext, CommandHandler
+from telegram import ParseMode
 
 CARD_FOLDER = "cards"
 WAIT_HOURS = 2
@@ -296,6 +297,21 @@ def top(update: Update, context: CallbackContext):
         cur.close()
         release_connection(conn)
 
+def mycards(update: Update, context: CallbackContext):
+    user_id = str(update.message.from_user.id)
+    user_data = load_user_data(user_id)
+
+    cards = user_data.get("cards", [])
+    if not cards:
+        update.message.reply_text("У вас пока нет карточек.")
+        return
+
+    lines = ["🎴 Ваши карточки:"]
+    for card in cards:
+        count = card.get("count", 1)
+        lines.append(f"- {card['name']} (редкость: {card['rarity'].capitalize()}), количество: {count}")
+
+    update.message.reply_text("\n".join(lines), parse_mode=ParseMode.MARKDOWN)
 
 def main():
     init_connection_pool()
@@ -306,7 +322,8 @@ def main():
 
     dp = updater.dispatcher
     dp.add_handler(CommandHandler("start", start))
-    dp.add_handler(CommandHandler("top", top))  # <- вот здесь добавляем команду /top
+    dp.add_handler(CommandHandler("mycards", mycards))
+    dp.add_handler(CommandHandler("top", top))
     dp.add_handler(MessageHandler(Filters.text & (~Filters.command), handle_message))
 
     updater.start_polling()
