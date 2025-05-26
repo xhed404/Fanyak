@@ -298,17 +298,21 @@ def mycards(update: Update, context: CallbackContext):
     user_id = str(update.message.from_user.id)
     user_data = load_user_data(user_id)
 
+    score = user_data.get("score", 0)
     cards = user_data.get("cards", [])
+
+    msg_lines = [f"💰 Ваши очки: {score}\n"]
+
     if not cards:
-        update.message.reply_text("У вас пока нет карточек.")
-        return
+        msg_lines.append("У вас пока нет карточек.")
+    else:
+        msg_lines.append("🎴 Ваши карточки:")
+        for card in cards:
+            count = card.get("count", 1)
+            msg_lines.append(f"- {card['name']} (редкость: {card['rarity'].capitalize()}), количество: {count}")
 
-    lines = ["🎴 Ваши карточки:"]
-    for card in cards:
-        count = card.get("count", 1)
-        lines.append(f"- {card['name']} (редкость: {card['rarity'].capitalize()}), количество: {count}")
+    update.message.reply_text("\n".join(msg_lines), parse_mode=ParseMode.MARKDOWN)
 
-    update.message.reply_text("\n".join(lines), parse_mode=ParseMode.MARKDOWN)
 
 def main():
     init_connection_pool()
