@@ -16,6 +16,7 @@ RARITY_EMOJIS = {
     "редкая": "💎",
     "мифическая": "🔥",
     "легендарная": "👑",
+    "лимитираванная" : "",
     "ультра-легендарная": "🌟"
 }
 
@@ -24,6 +25,7 @@ RARITY_POINTS = {
     "редкая": 10,
     "мифическая": 25,
     "легендарная": 50,
+    "лимитированная" : 100,
     "ультра-легендарная": 150
 }
 
@@ -32,6 +34,7 @@ RARITY_PROBABILITIES = {
     "редкая": 25,
     "мифическая": 17,
     "легендарная": 2.95,
+    "лимитированная" : 1,
     "ультра-легендарная": 0.05
 }
 
@@ -157,7 +160,7 @@ def handle_message(update: Update, context: CallbackContext):
         try:
             amount = int(text.split()[-1])
         except:
-            message.reply_text("⚠️ Формат: 'кубы дизайник сумма'")
+            message.reply_text("⚠️ Формат: 'кубы фаня сумма'")
             return
 
         user_data = load_user_data(user_id)
@@ -183,7 +186,7 @@ def handle_message(update: Update, context: CallbackContext):
         )
         return
 
-    if text not in ["дизайн", "дизайники"]:
+    if text not in ["фаня", "фаняк"]:
         return
 
     user_data = load_user_data(user_id)
@@ -195,7 +198,7 @@ def handle_message(update: Update, context: CallbackContext):
         hours, remainder = divmod(int(remaining), 3600)
         minutes, seconds = divmod(remainder, 60)
         msg = (
-            "😔 Вы уже искали карточки дизайников.\n\n"
+            "😔 Вы уже искали рядом Фаню.\n\n"
             f"🕐 Возвращайтесь через {hours} час {minutes} мин {seconds} сек."
         )
         message.reply_text(msg)
@@ -223,7 +226,7 @@ def handle_message(update: Update, context: CallbackContext):
     points = RARITY_POINTS.get(rarity, 5)
     already_has = any(card["name"] == name for card in user_data["cards"])
 
-    found_msg = "🔁 Повторная карточка!" if already_has else "🎉 Новая карточка!"
+    found_msg = "🔁 Повторная карточка! Будут начислены только очки!" if already_has else "🎉 Новая карточка!"
     user_data["score"] += points
     user_data["last_time"] = now_ts
 
