@@ -8,7 +8,7 @@ from telegram import Update, ParseMode
 from telegram.ext import Updater, MessageHandler, Filters, CallbackContext, CommandHandler
 
 CARD_FOLDER = "cards"
-WAIT_HOURS = 0.5
+WAIT_HOURS = 2
 CUBE_WAIT_SECONDS = 15 * 60  
 
 RARITY_EMOJIS = {
@@ -16,7 +16,7 @@ RARITY_EMOJIS = {
     "редкая": "💎",
     "мифическая": "🔥",
     "легендарная": "👑",
-    "лимитированная": "🌀"
+    "ультра-легендарная": "🌟"
 }
 
 RARITY_POINTS = {
@@ -24,7 +24,7 @@ RARITY_POINTS = {
     "редкая": 10,
     "мифическая": 25,
     "легендарная": 50,
-    "лимитированная": 100
+    "ультра-легендарная": 150
 }
 
 RARITY_PROBABILITIES = {
@@ -32,12 +32,12 @@ RARITY_PROBABILITIES = {
     "редкая": 25,
     "мифическая": 17,
     "легендарная": 2.95,
-    "лимитированная": 0.05
+    "ультра-легендарная": 0.05
 }
 
 DB_PARAMS = {
     'dbname': 'postgres',
-    'user': 'postgres.ohjvqejdhqdvmpinreng',
+    'user': 'postgres.iqbkiskngitgyfppzykp',
     'password': 'Mateoloko17+',
     'host': 'aws-0-eu-north-1.pooler.supabase.com',
     'port': 6543
@@ -137,7 +137,11 @@ def parse_card_filename(filename: str) -> tuple[str, str]:
         return ("Неизвестная Фаня", "обычная")
     name_part, rarity = base.rsplit("_", 1)
     name = name_part.replace("-", " ").capitalize()
-    return name, rarity.lower()
+    rarity = rarity.lower()
+
+    if rarity == "ультра-легендарная" or rarity == "ультра_легендарная":
+        rarity = "ультра-легендарная"
+    return name, rarity
 
 def handle_message(update: Update, context: CallbackContext):
     message = update.message
@@ -179,7 +183,7 @@ def handle_message(update: Update, context: CallbackContext):
         )
         return
 
-    if text not in ["фаня", "фаняк"]:
+    if text not in ["дизайн", "дизайники"]:
         return
 
     user_data = load_user_data(user_id)
@@ -191,7 +195,7 @@ def handle_message(update: Update, context: CallbackContext):
         hours, remainder = divmod(int(remaining), 3600)
         minutes, seconds = divmod(remainder, 60)
         msg = (
-            "😔 Вы осмотрелись, но не увидели рядом Фаню.\n\n"
+            "😔 Вы уже искали карточки дизайников.\n\n"
             f"🕐 Возвращайтесь через {hours} час {minutes} мин {seconds} сек."
         )
         message.reply_text(msg)
@@ -242,80 +246,45 @@ def handle_dice_result(context: CallbackContext):
     chat_id = data["chat_id"]
     amount = data["amount"]
     username = data["username"]
-    dice_value = data.get("dice_value", random.randint(1, 6))
+    dice_value = data["dice_value"]
 
     user_data = load_user_data(user_id)
-    now = datetime.now().timestamp()
-
-    if dice_value > 3:
-        win = int(amount * 1.5)
-        user_data["score"] += win
-        result = f"🎉 Победа! Выпало {dice_value}.\nВы выиграли {win} очков!"
-    else:
-        user_data["score"] -= amount
-        result = f"💀 Проигрыш! Выпало {dice_value}.\nВы потеряли {amount} очков."
-
-    user_data["last_cube_time"] = now
-    save_user_data(user_id, user_data, username=username)
-    context.bot.send_message(chat_id=chat_id, text=f"{result}\n🧮 Новый счёт: {user_data['score']}")
-
-def mycards_command(update: Update, context: CallbackContext):
-    user = update.message.from_user
-    user_id = str(user.id)
-    user_data = load_user_data(user_id)
-    cards = user_data.get("cards", [])
-    score = user_data.get("score", 0)
-
-    if not cards:
-        update.message.reply_text("У вас пока нет карточек 😔")
+    score = user_data["score"]
+    if amount > score:
+        context.bot.send_message(chat_id=chat_id, text="❌ Недостаточно очков для ставки.")
         return
 
-    rarity_counter = Counter()
-    for card in cards:
-        rarity_counter[card["rarity"].lower()] += card["count"]
+    if dice_value in [5, 6]:
+        score += amount
+        result_msg = f"🎉 Выпало {dice_value}! Вы выиграли {amount} очков."
+    else:
+        score -= amount
+        result_msg = f"😞 Выпало {dice_value}. Вы проиграли {amount} очков."
 
-    rarity_stats = "\n".join(
-        f"{RARITY_EMOJIS.get(r, '🎴')} {r.capitalize()} — {count}"
-        for r, count in rarity_counter.items()
-    )
+    user_data["score"] = max(score, 0)
+    user_data["last_cube_time"] = datetime.now().timestamp()
+    save_user_data(user_id, user_data, username=username)
 
-    reply_text = f"🎴 Ваши карточки (всего очков: {score}):\n\n{rarity_stats}\n\n"
-    for i, card in enumerate(cards, 1):
-        reply_text += f"{i}. {card['name']} — {card['rarity']} (x{card['count']})\n"
+    context.bot.send_message(chat_id=chat_id, text=result_msg)
 
-    update.message.reply_text(reply_text)
-
-def top_command(update: Update, context: CallbackContext):
-    conn = get_connection()
-    cur = conn.cursor()
-    try:
-        cur.execute("SELECT user_id, username, score FROM users ORDER BY score DESC LIMIT 5")
-        rows = cur.fetchall()
-    finally:
-        cur.close()
-        release_connection(conn)
-
-    text = "🏆 Топ 5 игроков:\n\n"
-    for i, (uid, uname, score) in enumerate(rows, 1):
-        name = f"@{uname}" if uname else f"[user](tg://user?id={uid})"
-        text += f"{i}. {name} — {score} очков\n"
-
-    update.message.reply_text(text, parse_mode=ParseMode.MARKDOWN)
+def start(update: Update, context: CallbackContext):
+    update.message.reply_text("Привет!")
 
 def main():
-    TOKEN = "7726532835:AAFF55l7B4Pbcc3JmDSF6Ksqzhdh9G466uc"
     init_connection_pool()
     init_db()
 
-    updater = Updater(TOKEN, use_context=True)
-    dp = updater.dispatcher
+    TOKEN = "7726532835:AAFF55l7B4Pbcc3JmDSF6Ksqzhdh9G466uc"
+    updater = Updater(TOKEN)
 
-    dp.add_handler(CommandHandler("mycards", mycards_command))
-    dp.add_handler(CommandHandler("top", top_command))
-    dp.add_handler(MessageHandler(Filters.text & ~Filters.command, handle_message))
+    dp = updater.dispatcher
+    dp.add_handler(CommandHandler("start", start))
+    dp.add_handler(MessageHandler(Filters.text & (~Filters.command), handle_message))
 
     updater.start_polling()
     updater.idle()
 
 if __name__ == "__main__":
     main()
+
+
