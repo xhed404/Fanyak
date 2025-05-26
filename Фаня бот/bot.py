@@ -276,8 +276,7 @@ def top(update: Update, context: CallbackContext):
     conn = get_connection()
     cur = conn.cursor()
     try:
-
-        cur.execute("SELECT username, score FROM users ORDER BY score DESC LIMIT 10;")
+        cur.execute("SELECT user_id, username, score FROM users ORDER BY score DESC LIMIT 10;")
         rows = cur.fetchall()
         
         if not rows:
@@ -285,14 +284,20 @@ def top(update: Update, context: CallbackContext):
             return
 
         msg_lines = ["🏆 Топ игроков по очкам:"]
-        for i, (username, score) in enumerate(rows, 1):
-            display_name = username if username else "Пользователь без имени"
+        for i, (user_id, username, score) in enumerate(rows, 1):
+            if username:
+                # Создание гиперссылки на профиль пользователя
+                display_name = f'<a href="tg://user?id={user_id}">{username}</a>'
+            else:
+                display_name = "Пользователь без имени"
+
             msg_lines.append(f"{i}. {display_name} — {score} очков")
-        
-        update.message.reply_text("\n".join(msg_lines))
+
+        update.message.reply_text("\n".join(msg_lines), parse_mode=ParseMode.HTML)
     finally:
         cur.close()
         release_connection(conn)
+
 
 def mycards(update: Update, context: CallbackContext):
     user_id = str(update.message.from_user.id)
