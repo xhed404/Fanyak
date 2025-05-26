@@ -157,7 +157,7 @@ def handle_message(update: Update, context: CallbackContext):
     user_id = str(user.id)
     username = user.username or ""
 
-    if text.startswith("кубы дизайник"):
+    if text.startswith("кубы фаня"):
         try:
             amount = int(text.split()[-1])
         except:
