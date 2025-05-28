@@ -427,7 +427,7 @@ def main():
     init_connection_pool()
     init_db()
 
-    updater = Updater("7726532835:AAFF55l7B4Pbcc3JmDSF6Ksqzhdh9G466ucN", use_context=True)
+    updater = Updater("7726532835:AAFF55l7B4Pbcc3JmDSF6Ksqzhdh9G466uc", use_context=True)
     dp = updater.dispatcher
 
     dp.add_handler(MessageHandler(Filters.text & ~Filters.command, handle_message))
