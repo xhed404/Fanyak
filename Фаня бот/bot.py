@@ -273,16 +273,19 @@ def handle_message(update: Update, context: CallbackContext):
     name, rarity = parse_card_filename(chosen_file)
     emoji = RARITY_EMOJIS.get(rarity, "🎴")
 
-    points = RARITY_POINTS.get(rarity, 5)
-    coins_earned = RARITY_COINS.get(rarity, 0)
-
     already_has = any(card["name"] == name for card in user_data["cards"])
-    
-    if already_has:
-        coins_earned = 0
 
-    user_data["score"] += points
-    user_data["coins"] += coins_earned
+    points = 0
+    coins_earned = 0
+    if not already_has:
+        points = RARITY_POINTS.get(rarity, 5)
+        coins_earned = RARITY_COINS.get(rarity, 0)
+        user_data["score"] += points
+        user_data["coins"] += coins_earned
+        card_status = "<b>Новая карточка!</b>"
+    else:
+        card_status = "<b>Повторная карточка</b> (очки и монеты не начислены)"
+
     user_data["last_time"] = now_ts
 
     save_user_data(user_id, user_data, card_to_update={"name": name, "rarity": rarity, "count": 1}, username=username)
@@ -293,7 +296,68 @@ def handle_message(update: Update, context: CallbackContext):
         caption=(
             f"{emoji} Вы нашли: {name}\n"
             f"⭐️ Очки: +{points}\n"
-            f"{coins_text}\n\n"
+            f"{coins_text}\n"
+            f"{card_status}\n\n"
+            f"💎 Ваш баланс: {user_data['score']} очков, {user_data['coins']} монет"
+        ),
+        parse_mode=ParseMode.HTML
+    )
+
+
+def open_chest(update: Update, context: CallbackContext, user_id: str, username: str, chest_type: str):
+    user_data = load_user_data(user_id)
+
+    cost = CHEST_COSTS[chest_type]
+    if user_data["coins"] < cost:
+        update.message.reply_text(f"❌ Недостаточно монет для открытия {chest_type} сундука. Требуется {cost} монет.")
+        return
+
+    user_data["coins"] -= cost
+
+    probs = CHEST_RARITY_PROBS[chest_type]
+    rarities = list(probs.keys())
+    weights = list(probs.values())
+    chosen_rarity = random.choices(rarities, weights=weights, k=1)[0]
+
+    all_cards = [f for f in os.listdir(CARD_FOLDER) if f.lower().endswith((".jpg", ".png"))]
+    cards_by_rarity = {r: [] for r in RARITY_PROBABILITIES}
+    for filename in all_cards:
+        _, rarity = parse_card_filename(filename)
+        if rarity in cards_by_rarity:
+            cards_by_rarity[rarity].append(filename)
+
+    if not cards_by_rarity.get(chosen_rarity):
+        update.message.reply_text("❌ Ошибка при выборе карты из сундука.")
+        return
+
+    chosen_file = random.choice(cards_by_rarity[chosen_rarity])
+    name, rarity = parse_card_filename(chosen_file)
+    emoji = RARITY_EMOJIS.get(rarity, "🎴")
+
+    already_has = any(card["name"] == name for card in user_data["cards"])
+
+    points = 0
+    coins_earned = 0
+    if not already_has:
+        points = RARITY_POINTS.get(rarity, 5)
+        coins_earned = RARITY_COINS.get(rarity, 0)
+        user_data["score"] += points
+        user_data["coins"] += coins_earned
+        card_status = "<b>Новая карточка!</b>"
+    else:
+        card_status = "<b>Повторная карточка</b> (очки и монеты не начислены)"
+
+    save_user_data(user_id, user_data, card_to_update={"name": name, "rarity": rarity, "count": 1}, username=username)
+
+    coins_text = f"💰 +{coins_earned} монет" if coins_earned > 0 else ""
+    update.message.reply_photo(
+        photo=open(os.path.join(CARD_FOLDER, chosen_file), "rb"),
+        caption=(
+            f"{emoji} Вы открыли {chest_type} сундук и получили:\n"
+            f"{name}\n"
+            f"⭐️ Очки: +{points}\n"
+            f"{coins_text}\n"
+            f"{card_status}\n\n"
             f"💎 Ваш баланс: {user_data['score']} очков, {user_data['coins']} монет"
         ),
         parse_mode=ParseMode.HTML
