@@ -396,25 +396,32 @@ def open_chest(update: Update, context: CallbackContext, user_id: str, username:
     points = RARITY_POINTS.get(rarity, 5)
     coins_earned = RARITY_COINS.get(rarity, 0)
 
-    already_has = any(card["name"] == name for card in user_data["cards"])
+        already_has = any(card["name"] == name for card in user_data["cards"])
 
-    if already_has:
-        coins_earned = 0
-
-    user_data["score"] += points
-    user_data["coins"] += coins_earned
+    points = 0
+    coins_earned = 0
+    if not already_has:
+        points = RARITY_POINTS.get(rarity, 5)
+        coins_earned = RARITY_COINS.get(rarity, 0)
+        user_data["score"] += points
+        user_data["coins"] += coins_earned
+        card_status = "🆕 <b>Новая карточка!</b>"
+    else:
+        card_status = "♻️ <b>Повторная карточка</b> (очки и монеты не начислены)"
 
     save_user_data(user_id, user_data, card_to_update={"name": name, "rarity": rarity, "count": 1}, username=username)
 
-    coins_text = f"💰 +{coins_earned} монет" if coins_earned > 0 else ""
     update.message.reply_photo(
         photo=open(os.path.join(CARD_FOLDER, chosen_file), "rb"),
         caption=(
-            f"{emoji} Вы открыли {chest_type} сундук и получили:\n"
-            f"{name}\n"
-            f"⭐️ Очки: +{points}\n"
-            f"{coins_text}\n\n"
-            f"💎 Ваш баланс: {user_data['score']} очков, {user_data['coins']} монет"
+            f"🎉 <b>Поздравляем!</b> Вы открыли <b>{chest_type} сундук</b> и получили:\n\n"
+            f"🔹 <b>Карта:</b> {emoji} <b>{name}</b>\n"
+            f"🎖 <b>Редкость:</b> <b>{rarity}</b>\n"
+            f"⭐️ <b>Очки:</b> +<b>{points}</b>\n"
+            f"💰 <b>Монеты:</b> +<b>{coins_earned}</b>\n"
+            f"{card_status}\n\n"
+            f"📦 <b>Ваш баланс:</b> 💎 <b>{user_data['score']}</b> очков | 🪙 <b>{user_data['coins']}</b> монет\n"
+            f"✨✨✨"
         ),
         parse_mode=ParseMode.HTML
     )
