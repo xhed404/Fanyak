@@ -6,18 +6,17 @@ from datetime import datetime
 from collections import Counter
 from telegram import Update, ParseMode
 from telegram.ext import Updater, MessageHandler, Filters, CallbackContext, CommandHandler
-from telegram import ParseMode
 
 CARD_FOLDER = "cards"
 WAIT_HOURS = 2
-CUBE_WAIT_SECONDS = 15 * 60  
+CUBE_WAIT_SECONDS = 15 * 60
 
 RARITY_EMOJIS = {
     "обычная": "⭐️",
     "редкая": "💎",
     "мифическая": "🔥",
     "легендарная": "👑",
-    "лимитираванная" : "💀",
+    "лимитированная": "💀",
 }
 
 RARITY_POINTS = {
@@ -25,7 +24,15 @@ RARITY_POINTS = {
     "редкая": 10,
     "мифическая": 25,
     "легендарная": 50,
-    "лимитированная" : 100,
+    "лимитированная": 100,
+}
+
+RARITY_COINS = {
+    "обычная": 2,
+    "редкая": 5,
+    "мифическая": 15,
+    "легендарная": 30,
+    "лимитированная": 50,
 }
 
 RARITY_PROBABILITIES = {
@@ -33,7 +40,37 @@ RARITY_PROBABILITIES = {
     "редкая": 25,
     "мифическая": 17,
     "легендарная": 2.95,
-    "лимитированная" : 4,
+    "лимитированная": 4,
+}
+
+CHEST_COSTS = {
+    "обычный": 20,
+    "редкий": 50,
+    "легендарный": 100,
+}
+
+CHEST_RARITY_PROBS = {
+    "обычный": {
+        "обычная": 75,
+        "редкая": 20,
+        "мифическая": 4,
+        "легендарная": 1,
+        "лимитированная": 0,
+    },
+    "редкий": {
+        "обычная": 40,
+        "редкая": 35,
+        "мифическая": 15,
+        "легендарная": 8,
+        "лимитированная": 2,
+    },
+    "легендарный": {
+        "обычная": 10,
+        "редкая": 20,
+        "мифическая": 30,
+        "легендарная": 30,
+        "лимитированная": 10,
+    },
 }
 
 DB_PARAMS = {
@@ -43,7 +80,6 @@ DB_PARAMS = {
     'host': 'aws-0-eu-north-1.pooler.supabase.com',
     'port': 6543
 }
-
 
 conn_pool = None
 
@@ -71,6 +107,7 @@ def init_db():
                 user_id TEXT PRIMARY KEY,
                 username TEXT,
                 score INTEGER NOT NULL DEFAULT 0,
+                coins INTEGER NOT NULL DEFAULT 0,
                 last_time DOUBLE PRECISION NOT NULL DEFAULT 0,
                 last_cube_time DOUBLE PRECISION NOT NULL DEFAULT 0
             );
@@ -94,15 +131,15 @@ def load_user_data(user_id: str) -> dict:
     conn = get_connection()
     cur = conn.cursor()
     try:
-        cur.execute("SELECT score, last_time, last_cube_time, username FROM users WHERE user_id = %s", (user_id,))
+        cur.execute("SELECT score, coins, last_time, last_cube_time, username FROM users WHERE user_id = %s", (user_id,))
         row = cur.fetchone()
         if row:
-            score, last_time, last_cube_time, username = row
+            score, coins, last_time, last_cube_time, username = row
         else:
-            score, last_time, last_cube_time, username = 0, 0, 0, ""
+            score, coins, last_time, last_cube_time, username = 0, 0, 0, 0, ""
             cur.execute(
-                "INSERT INTO users(user_id, username, score, last_time, last_cube_time) VALUES (%s, %s, %s, %s, %s)",
-                (user_id, username, score, last_time, last_cube_time)
+                "INSERT INTO users(user_id, username, score, coins, last_time, last_cube_time) VALUES (%s, %s, %s, %s, %s, %s)",
+                (user_id, username, score, coins, last_time, last_cube_time)
             )
             conn.commit()
 
@@ -112,15 +149,22 @@ def load_user_data(user_id: str) -> dict:
         cur.close()
         release_connection(conn)
 
-    return {"score": score, "last_time": last_time, "last_cube_time": last_cube_time, "cards": cards, "username": username}
+    return {"score": score, "coins": coins, "last_time": last_time, "last_cube_time": last_cube_time, "cards": cards, "username": username}
 
 def save_user_data(user_id: str, data: dict, card_to_update: dict = None, username: str = None):
     conn = get_connection()
     cur = conn.cursor()
     try:
         cur.execute("""
-            UPDATE users SET score=%s, last_time=%s, last_cube_time=%s, username=%s WHERE user_id=%s
-        """, (data["score"], data["last_time"], data.get("last_cube_time", 0), username, user_id))
+            UPDATE users SET score=%s, coins=%s, last_time=%s, last_cube_time=%s, username=%s WHERE user_id=%s
+        """, (
+            data.get("score", 0),
+            data.get("coins", 0),
+            data.get("last_time", 0),
+            data.get("last_cube_time", 0),
+            username,
+            user_id
+        ))
 
         if card_to_update:
             cur.execute("""
@@ -140,9 +184,6 @@ def parse_card_filename(filename: str) -> tuple[str, str]:
     name_part, rarity = base.rsplit("_", 1)
     name = name_part.replace("-", " ").capitalize()
     rarity = rarity.lower()
-
-    if rarity == "ультра-легендарная" or rarity == "ультра_легендарная":
-        rarity = "ультра-легендарная"
     return name, rarity
 
 def handle_message(update: Update, context: CallbackContext):
@@ -154,6 +195,16 @@ def handle_message(update: Update, context: CallbackContext):
     user = message.from_user
     user_id = str(user.id)
     username = user.username or ""
+
+    if text.startswith("сундук"):
+        parts = text.split()
+        if len(parts) != 2 or parts[1] not in CHEST_COSTS:
+            message.reply_text(f"Используйте: сундук [обычный|редкий|легендарный]")
+            return
+
+        chest_type = parts[1]
+        open_chest(update, context, user_id, username, chest_type)
+        return
 
     if text.startswith("кубы фаня"):
         try:
@@ -223,23 +274,86 @@ def handle_message(update: Update, context: CallbackContext):
     emoji = RARITY_EMOJIS.get(rarity, "🎴")
 
     points = RARITY_POINTS.get(rarity, 5)
-    already_has = any(card["name"] == name for card in user_data["cards"])
+    coins_earned = RARITY_COINS.get(rarity, 0)
 
-    found_msg = "🔁 Повторная карточка! Будут начислены только очки!" if already_has else "🎉 Новая карточка!"
+    already_has = any(card["name"] == name for card in user_data["cards"])
+    
+    if already_has:
+        coins_earned = 0
+
     user_data["score"] += points
+    user_data["coins"] += coins_earned
     user_data["last_time"] = now_ts
 
-    save_user_data(user_id, user_data, {"name": name, "rarity": rarity.capitalize(), "count": 1}, username)
+    save_user_data(user_id, user_data, card_to_update={"name": name, "rarity": rarity, "count": 1}, username=username)
 
-    caption = (
-        f"📸 *{name}*\n"
-        f"{emoji} Редкость: *{rarity.capitalize()}*\n"
-        f"{found_msg}\n"
-        f"🎁 +{points} очков  |  🧮 Всего: {user_data['score']}"
+    coins_text = f"💰 +{coins_earned} монет" if coins_earned > 0 else ""
+    message.reply_photo(
+        photo=open(os.path.join(CARD_FOLDER, chosen_file), "rb"),
+        caption=(
+            f"{emoji} Вы нашли: {name}\n"
+            f"⭐️ Очки: +{points}\n"
+            f"{coins_text}\n\n"
+            f"💎 Ваш баланс: {user_data['score']} очков, {user_data['coins']} монет"
+        ),
+        parse_mode=ParseMode.HTML
     )
 
-    with open(os.path.join(CARD_FOLDER, chosen_file), "rb") as img:
-        context.bot.send_photo(chat_id=message.chat_id, photo=img, caption=caption, parse_mode=ParseMode.MARKDOWN)
+def open_chest(update: Update, context: CallbackContext, user_id: str, username: str, chest_type: str):
+    user_data = load_user_data(user_id)
+
+    cost = CHEST_COSTS[chest_type]
+    if user_data["coins"] < cost:
+        update.message.reply_text(f"❌ Недостаточно монет для открытия {chest_type} сундука. Требуется {cost} монет.")
+        return
+
+    user_data["coins"] -= cost
+
+    probs = CHEST_RARITY_PROBS[chest_type]
+    rarities = list(probs.keys())
+    weights = list(probs.values())
+    chosen_rarity = random.choices(rarities, weights=weights, k=1)[0]
+
+    all_cards = [f for f in os.listdir(CARD_FOLDER) if f.lower().endswith((".jpg", ".png"))]
+    cards_by_rarity = {r: [] for r in RARITY_PROBABILITIES}
+    for filename in all_cards:
+        _, rarity = parse_card_filename(filename)
+        if rarity in cards_by_rarity:
+            cards_by_rarity[rarity].append(filename)
+
+    if not cards_by_rarity.get(chosen_rarity):
+        update.message.reply_text("❌ Ошибка при выборе карты из сундука.")
+        return
+
+    chosen_file = random.choice(cards_by_rarity[chosen_rarity])
+    name, rarity = parse_card_filename(chosen_file)
+    emoji = RARITY_EMOJIS.get(rarity, "🎴")
+
+    points = RARITY_POINTS.get(rarity, 5)
+    coins_earned = RARITY_COINS.get(rarity, 0)
+
+    already_has = any(card["name"] == name for card in user_data["cards"])
+
+    if already_has:
+        coins_earned = 0
+
+    user_data["score"] += points
+    user_data["coins"] += coins_earned
+
+    save_user_data(user_id, user_data, card_to_update={"name": name, "rarity": rarity, "count": 1}, username=username)
+
+    coins_text = f"💰 +{coins_earned} монет" if coins_earned > 0 else ""
+    update.message.reply_photo(
+        photo=open(os.path.join(CARD_FOLDER, chosen_file), "rb"),
+        caption=(
+            f"{emoji} Вы открыли {chest_type} сундук и получили:\n"
+            f"{name}\n"
+            f"⭐️ Очки: +{points}\n"
+            f"{coins_text}\n\n"
+            f"💎 Ваш баланс: {user_data['score']} очков, {user_data['coins']} монет"
+        ),
+        parse_mode=ParseMode.HTML
+    )
 
 def handle_dice_result(context: CallbackContext):
     job = context.job
@@ -251,93 +365,77 @@ def handle_dice_result(context: CallbackContext):
     dice_value = data["dice_value"]
 
     user_data = load_user_data(user_id)
-    score = user_data["score"]
-    if amount > score:
-        context.bot.send_message(chat_id=chat_id, text="❌ Недостаточно очков для ставки.")
-        return
-
-    if dice_value in [4, 5, 6]:
-        score += amount
-        result_msg = f"🎉 Выпало {dice_value}! Вы выиграли {amount} очков."
+    win = False
+    if dice_value > 3:
+        user_data["score"] += amount
+        win = True
     else:
-        score -= amount
-        result_msg = f"😞 Выпало {dice_value}. Вы проиграли {amount} очков."
+        user_data["score"] -= amount
+        if user_data["score"] < 0:
+            user_data["score"] = 0
 
-    user_data["score"] = max(score, 0)
     user_data["last_cube_time"] = datetime.now().timestamp()
     save_user_data(user_id, user_data, username=username)
 
-    context.bot.send_message(chat_id=chat_id, text=result_msg)
+    result_text = (
+        f"🎲 Выпало: {dice_value}\n"
+        f"{'Вы выиграли' if win else 'Вы проиграли'} {amount} очков!\n"
+        f"💎 Текущий баланс: {user_data['score']} очков, {user_data['coins']} монет"
+    )
 
-def start(update: Update, context: CallbackContext):
-    update.message.reply_text("Привет!")
-
-def top(update: Update, context: CallbackContext):
-    conn = get_connection()
-    cur = conn.cursor()
-    try:
-        cur.execute("SELECT user_id, username, score FROM users ORDER BY score DESC LIMIT 10;")
-        rows = cur.fetchall()
-        
-        if not rows:
-            update.message.reply_text("Пока нет игроков с очками.")
-            return
-
-        msg_lines = ["🏆 Топ игроков по очкам:"]
-        for i, (user_id, username, score) in enumerate(rows, 1):
-            if username:
-                # Создание гиперссылки на профиль пользователя
-                display_name = f'<a href="tg://user?id={user_id}">{username}</a>'
-            else:
-                display_name = "Пользователь без имени"
-
-            msg_lines.append(f"{i}. {display_name} — {score} очков")
-
-        update.message.reply_text("\n".join(msg_lines), parse_mode=ParseMode.HTML)
-    finally:
-        cur.close()
-        release_connection(conn)
-
+    context.bot.send_message(chat_id=chat_id, text=result_text)
 
 def mycards(update: Update, context: CallbackContext):
     user_id = str(update.message.from_user.id)
     user_data = load_user_data(user_id)
 
-    score = user_data.get("score", 0)
-    cards = user_data.get("cards", [])
+    if not user_data["cards"]:
+        update.message.reply_text("У вас пока нет карточек.")
+        return
 
-    msg_lines = [f"💰 Ваши очки: {score}\n"]
+    lines = []
+    for card in user_data["cards"]:
+        emoji = RARITY_EMOJIS.get(card["rarity"], "")
+        lines.append(f"{emoji} {card['name']} — {card['rarity'].capitalize()} (x{card['count']})")
 
-    if not cards:
-        msg_lines.append("У вас пока нет карточек.")
-    else:
-        msg_lines.append("🎴 Ваши карточки:")
-        for card in cards:
-            count = card.get("count", 1)
-            msg_lines.append(f"- {card['name']} (редкость: {card['rarity'].capitalize()}), количество: {count}")
+    text = "🎴 Ваши карточки:\n" + "\n".join(lines)
+    update.message.reply_text(text)
 
-    update.message.reply_text("\n".join(msg_lines), parse_mode=ParseMode.MARKDOWN)
+def top(update: Update, context: CallbackContext):
+    conn = get_connection()
+    cur = conn.cursor()
+    try:
+        cur.execute("SELECT username, score FROM users ORDER BY score DESC LIMIT 10")
+        rows = cur.fetchall()
+    finally:
+        cur.close()
+        release_connection(conn)
 
+    if not rows:
+        update.message.reply_text("Топ игроков пока пуст.")
+        return
+
+    lines = []
+    for i, (username, score) in enumerate(rows, 1):
+        name_display = username if username else "Аноним"
+        lines.append(f"{i}. {name_display} — {score} очков")
+
+    text = "🏆 Топ игроков по очкам:\n" + "\n".join(lines)
+    update.message.reply_text(text)
 
 def main():
     init_connection_pool()
     init_db()
 
-    TOKEN = "7726532835:AAFF55l7B4Pbcc3JmDSF6Ksqzhdh9G466uc"
-    updater = Updater(TOKEN)
-
+    updater = Updater("7726532835:AAFF55l7B4Pbcc3JmDSF6Ksqzhdh9G466ucN", use_context=True)
     dp = updater.dispatcher
-    dp.add_handler(CommandHandler("start", start))
+
+    dp.add_handler(MessageHandler(Filters.text & ~Filters.command, handle_message))
     dp.add_handler(CommandHandler("mycards", mycards))
     dp.add_handler(CommandHandler("top", top))
-    dp.add_handler(MessageHandler(Filters.text & (~Filters.command), handle_message))
-
+    
     updater.start_polling()
     updater.idle()
 
-
 if __name__ == "__main__":
     main()
-
-
-
