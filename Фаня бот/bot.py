@@ -469,8 +469,15 @@ def mycards(update: Update, context: CallbackContext):
         emoji = RARITY_EMOJIS.get(card["rarity"], "")
         lines.append(f"{emoji} {card['name']} — {card['rarity'].capitalize()} (x{card['count']})")
 
-    text = "🎴 Ваши карточки:\n" + "\n".join(lines)
-    update.message.reply_text(text)
+    text = (
+        "🎴 <b>Ваши карточки:</b>\n" +
+        "\n".join(lines) +
+        "\n\n" +
+        f"💎 <b>Очки:</b> {user_data['score']} | 👑 <b>Монеты:</b> {user_data['coins']}"
+    )
+
+    update.message.reply_text(text, parse_mode=ParseMode.HTML)
+
 
 def top(update: Update, context: CallbackContext):
     conn = get_connection()
