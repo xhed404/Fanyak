@@ -295,15 +295,15 @@ def handle_message(update: Update, context: CallbackContext):
     message.reply_photo(
         photo=open(os.path.join(CARD_FOLDER, chosen_file), "rb"),
         caption=(
-            f"{emoji} Вы нашли: {name}\n"
-            f"⭐️ Очки: +{points}\n"
+            f"{emoji} <b>Вы нашли:</b> {name}\n"
+            f"🏅 <b>Редкость:</b> <b>{rarity.capitalize()}</b>\n"
+            f"⭐️ <b>Очки:</b> +{points}\n"
             f"{coins_text}\n"
             f"{card_status}\n\n"
-            f"💎 Ваш баланс: {user_data['score']} очков, {user_data['coins']} монет"
+            f"💎 <b>Ваш баланс:</b> 🎴 {user_data['score']} очков | 👑 {user_data['coins']} монет"
         ),
         parse_mode=ParseMode.HTML
     )
-
 
 def open_chest(update: Update, context: CallbackContext, user_id: str, username: str, chest_type: str):
     user_data = load_user_data(user_id)
