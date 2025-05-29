@@ -408,11 +408,14 @@ def open_chest(update: Update, context: CallbackContext, user_id: str, username:
     if not already_has:
         points = RARITY_POINTS.get(rarity, 5)
         coins_earned = RARITY_COINS.get(rarity, 0)
-        user_data["score"] += points
-        user_data["coins"] += coins_earned
         card_status = "🆕 <b>Новая карточка!</b>"
     else:
-        card_status = "♻️ <b>Повторная карточка</b> (очки и монеты не начислены)"
+        points = RARITY_POINTS.get(rarity, 5)
+        coins_earned = 0
+        card_status = "♻️ <b>Повторная карточка</b> (начислены только очки)"
+
+    user_data["score"] += points
+    user_data["coins"] += coins_earned
 
     save_user_data(user_id, user_data, card_to_update={"name": name, "rarity": rarity, "count": 1}, username=username)
 
