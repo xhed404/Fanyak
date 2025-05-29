@@ -396,7 +396,7 @@ def open_chest(update: Update, context: CallbackContext, user_id: str, username:
     points = RARITY_POINTS.get(rarity, 5)
     coins_earned = RARITY_COINS.get(rarity, 0)
 
-        already_has = any(card["name"] == name for card in user_data["cards"])
+    already_has = any(card["name"] == name for card in user_data["cards"])
 
     points = 0
     coins_earned = 0
