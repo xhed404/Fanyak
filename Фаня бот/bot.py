@@ -358,12 +358,13 @@ def open_chest(update: Update, context: CallbackContext, user_id: str, username:
     update.message.reply_photo(
         photo=open(os.path.join(CARD_FOLDER, chosen_file), "rb"),
         caption=(
-            f"{emoji} Вы открыли {chest_type} сундук и получили:\n"
-            f"{name}\n"
-            f"⭐️ Очки: +{points}\n"
+            f"{emoji} <b>Вы открыли:</b> <b>{chest_type.capitalize()} сундук</b>\n"
+            f"🎴 <b>Карточка:</b> {name}\n"
+            f"🏅 <b>Редкость карточки:</b> <b>{rarity.capitalize()}</b>\n"
+            f"⭐️ <b>Очки:</b> +{points}\n"
             f"{coins_text}\n"
             f"{card_status}\n\n"
-            f"💎 Ваш баланс: {user_data['score']} очков, {user_data['coins']} монет"
+            f"💎 <b>Ваш баланс:</b> {user_data['score']} очков, {user_data['coins']} монет"
         ),
         parse_mode=ParseMode.HTML
     )
